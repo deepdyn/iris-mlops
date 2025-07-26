@@ -1,0 +1,7 @@
+name: sanity
+on: [push]
+jobs:
+  ok:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "workflow works"
