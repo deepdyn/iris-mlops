@@ -1,0 +1,61 @@
+name: CD – Iris API to GKE
+
+on:
+  push:
+    branches: [ "main" ]     # deploy on every merge to main
+  workflow_dispatch:         # allow manual trigger
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: us-central1              # same as your cluster
+  CLUSTER: iris-cluster            # your cluster’s name
+  AR_REPO: iris-docker             # Artifact Registry repo name
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write        # needed for gcloud auth
+    steps:
+
+    - uses: actions/checkout@v4
+
+    - name: Install gcloud
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ env.PROJECT_ID }}
+        service_account_key: ${{ secrets.GCP_SA_KEY }}
+        install_components: "kubectl"
+
+    - name: Authorise Docker to Artifact Registry
+      run: |
+        gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+    - name: Build & push container
+      run: |
+        IMAGE_URI=${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/iris-api:${{ github.sha }}
+        docker build -t $IMAGE_URI .
+        docker push $IMAGE_URI
+        echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+    - name: Get GKE credentials
+      run: |
+        gcloud container clusters get-credentials ${{ env.CLUSTER }} \
+          --region ${{ env.REGION }} --project ${{ env.PROJECT_ID }}
+
+    - name: Deploy to GKE
+      run: |
+        sed -i "s|IMAGE_PLACEHOLDER|${IMAGE_URI}|g" k8s/deployment.yaml
+        kubectl apply -f k8s/deployment.yaml -f k8s/service.yaml
+
+    - name: Comment with CML
+      env:
+        REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        pip install cml
+        echo "### 🚀 Iris API deployed" > report.md
+        kubectl get svc iris-api-svc -o jsonpath='{.status.loadBalancer.ingress[0].ip}' | \
+          xargs -I{} echo "**Endpoint:** http://{}/predict/" >> report.md || echo "Service IP pending…" >> report.md
+        cml comment create report.md
+
