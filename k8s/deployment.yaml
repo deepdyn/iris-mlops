@@ -14,7 +14,9 @@ spec:
     spec:
       containers:
       - name: iris-api
-        image: IMAGE_PLACEHOLDER   # ← workflow replaces this
+        # ⟨IMAGE_PLACEHOLDER⟩ will be replaced by the GitHub Action
+        image: IMAGE_PLACEHOLDER
         ports:
         - containerPort: 8200
+
 
