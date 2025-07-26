@@ -1,0 +1,62 @@
+name: CD - Iris API to GKE
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: iris-api
+  REGION: ${{ secrets.REGION }}
+  REPO: iris-docker
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - uses: google-github-actions/setup-gcloud@v2
+      with:
+        install_components: kubectl
+
+    - name: Build and Push
+      env:
+        PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      run: |
+        IMAGE_URI=${{ env.REGION }}-docker.pkg.dev/${PROJECT_ID}/${{ env.REPO }}/${{ env.IMAGE_NAME }}:${GITHUB_SHA}
+        gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+        docker build -t $IMAGE_URI .
+        docker push $IMAGE_URI
+        echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+    - name: Configure kubectl
+      env:
+        PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      run: |
+        gcloud container clusters get-credentials iris-cluster \
+          --region ${{ env.REGION }} --project $PROJECT_ID
+
+    - name: kubectl apply
+      run: |
+        sed -i "s|IMAGE_PLACEHOLDER|${IMAGE_URI}|g" k8s/deployment.yaml
+        kubectl apply -f k8s/deployment.yaml -f k8s/service.yaml
+
+    - name: CML comment
+      env:
+        REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        pip install --quiet cml
+        echo "### :rocket: Iris API deployed" > report.md
+        echo "*Image:* \`$IMAGE_URI\`" >> report.md
+        kubectl get svc iris-api-svc \
+          -o jsonpath='{.status.loadBalancer.ingress[0].ip}' | \
+          xargs -I{} echo "**Endpoint:** http://{}/predict/" >> report.md || true
+        cml comment create report.md
+
